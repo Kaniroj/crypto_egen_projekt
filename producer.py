@@ -1,29 +1,35 @@
-from kafka import KafkaProducer
-import json
-import requests
+# producer
+from quixstreams import Application
 import time
+from connect_api import get_data_from_api
 
-producer = KafkaProducer(
-    bootstrap_servers='localhost:9092',
-    value_serializer=lambda v: json.dumps(v).encode('utf-8')
-)
+def main():
+    app = Application(broker_address="localhost:9092", consumer_group="coin_group")
+    coins_topic = app.topic(name="coins", value_serializer="json")
 
-def fetch_xrp_data():
-    url = "https://api.coingecko.com/api/v3/coins/ripple"
-    response = requests.get(url)
-    data = response.json()
-    return {
-        "timestamp": data["last_updated"],
-        "price_usd": data["market_data"]["current_price"]["usd"],
-        "volume_24h": data["market_data"]["total_volume"]["usd"]
-    }
+    with app.get_producer() as producer:
+        while True:
+            coin_latest = get_data_from_api("XRP")
 
-def send_to_kafka():
-    while True:
-        xrp_data = fetch_xrp_data()
-        producer.send('xrp_topic', xrp_data)
-        print(f"Skickat: {xrp_data}")
-        time.sleep(60)  # Uppdatera var 60:e sekund
+            kafka_message = coins_topic.serialize(
+                key=coin_latest["symbol"], value=coin_latest
+            )
+
+            print(
+                f"produce event with key = {kafka_message.key}, price = {coin_latest['quote']['USD']['price']}"
+                f"volume_24h = {coin_latest['quote']['USD']['volume_24h']},"
+                f"market_cap = {coin_latest['quote']['USD']['market_cap']},"
+                f"percent_change_1h = {coin_latest['quote']['USD']['percent_change_1h']},"
+                f"percent_change_24h = {coin_latest['quote']['USD']['percent_change_24h']},"
+                f"percent_change_7d = {coin_latest['quote']['USD']['percent_change_7d']}"   
+            )
+
+            producer.produce(
+                topic=coins_topic.name, key=kafka_message.key, value=kafka_message.value
+            )
+
+            time.sleep(30)
+
 
 if __name__ == "__main__":
-    send_to_kafka()
+    main()

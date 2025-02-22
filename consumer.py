@@ -1,49 +1,115 @@
-from kafka import KafkaConsumer
-import json
-import psycopg2
-from psycopg2 import Error
+# consumer
+from quixstreams import Application
 
-# Postgres-konfiguration
-def init_db():
-    conn = psycopg2.connect(
-        dbname="xrp_db",
-        user="xrp_user",
-        password="xrp_password",
-        host="localhost",
-        port="5432"
-    )
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS xrp_data (
-            id SERIAL PRIMARY KEY,
-            timestamp TIMESTAMP,
-            price_usd FLOAT,
-            volume_24h FLOAT
-        );
-    """)
-    conn.commit()
-    return conn
-
-# Kafka-konsument
-consumer = KafkaConsumer(
-    'xrp_topic',
-    bootstrap_servers='localhost:9092',
-    auto_offset_reset='earliest',
-    value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+from quixstreams import Application
+from quixstreams.sinks.community.postgresql import PostgreSQLSink
+from constants import (
+    POSTGRES_DBNAME,
+    POSTGRES_HOST,
+    POSTGRES_PASSWORD,
+    POSTGRES_PORT,
+    POSTGRES_USER,
 )
 
-# Spara till Postgres
-def save_to_postgres(conn, data):
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO xrp_data (timestamp, price_usd, volume_24h)
-        VALUES (%s, %s, %s);
-    """, (data['timestamp'], data['price_usd'], data['volume_24h']))
-    conn.commit()
+from quixstreams.sinks.community.postgresql import PostgreSQLSink
+
+
+def extract_coin_data(message):
+    latest_quote = message["quote"]["USD"]
+    price_usd = latest_quote["price"]
+    price_sek = update_price_in_currency(price_usd, "SEK")
+    price_dkk = update_price_in_currency(price_usd, "DKK")
+    price_nok = update_price_in_currency(price_usd, "NOK")
+    price_isk = update_price_in_currency(price_usd, "ISK")
+    price_eur = update_price_in_currency(price_usd, "EUR")
+    change_24h = latest_quote["percent_change_24h"]
+
+    return {
+        "coin": message["name"],
+        "price_sek": price_sek,
+        "price_dkk": price_dkk,
+        "price_nok": price_nok,
+        "price_isk": price_isk,
+        "price_eur": price_eur,
+        "volume": latest_quote["volume_24h"],
+        "updated": message["last_updated"],
+        "percent_change_24h": change_24h
+    }
+
+
+
+# exchange by hardcoding
+def get_exchange_rate_hardcoded(target_currency):
+    exchange_rates = {
+        "SEK": 10.7,    
+        "DKK": 7.1,    
+        "NOK": 11.2,    
+        "ISK": 140.0,
+        "EUR": 0.95   
+    }
+    
+    if target_currency in exchange_rates:
+        return exchange_rates[target_currency]
+    else:
+        print(f"Currency {target_currency} not supported.")
+        return None
+
+def update_price_in_currency(price_in_usd, target_currency):
+    exchange_rate = get_exchange_rate_hardcoded(target_currency)
+    if exchange_rate:
+        return round(price_in_usd * exchange_rate, 3)
+    else:
+        print(f"Cannot update price, since the currency was not able to be found for {target_currency}.")
+        return None
+    
+
+
+def create_postgres_sink():
+    sink = PostgreSQLSink(
+        host=POSTGRES_HOST,
+        port=POSTGRES_PORT,
+        dbname=POSTGRES_DBNAME,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        table_name="XRP",
+        schema_auto_update=True,
+    )
+
+    return sink
+
+def main():
+    app = Application(
+        broker_address="localhost:9092",
+        consumer_group="coin_group",
+        auto_offset_reset="earliest",
+    )
+    coins_topic = app.topic(name="coins", value_deserializer="json")
+
+    sdf = app.dataframe(topic=coins_topic)
+
+    # transformations
+    sdf = sdf.apply(extract_coin_data)
+
+
+    sdf.update(lambda coin_data: 
+    print(f"Coin Data:\n"
+     f"Coin: {coin_data['coin']}\n"
+     f"Price in SEK: {coin_data['price_sek']:.3f}\n"
+     f"Price in DKK: {coin_data['price_dkk']:.3f}\n"
+     f"Price in NOK: {coin_data['price_nok']:.3f}\n"
+     f"Price in ISK: {coin_data['price_isk']:.3f}\n"
+     f"Price in EUR: {coin_data['price_eur']:.3f}\n"
+     f"Volume: {coin_data['volume']:.3f}\n"
+     f"Updated: {coin_data['updated']}\n"
+     f"Percent change latest 24h {coin_data['percent_change_24h']}"
+     ))
+    
+
+    # sink to postgres
+    postgres_sink = create_postgres_sink()
+    sdf.sink(postgres_sink)
+
+    app.run()
 
 if __name__ == "__main__":
-    conn = init_db()
-    for message in consumer:
-        xrp_data = message.value
-        save_to_postgres(conn, xrp_data)
-        print(f"Sparat: {xrp_data}")
+    main()
