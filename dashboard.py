@@ -1,7 +1,11 @@
 import streamlit as st
+
 import pandas as pd
+
 import psycopg2
+
 import time
+
 
 # Hämta data från Postgres
 def fetch_data():
