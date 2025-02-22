@@ -10,7 +10,7 @@ def fetch_data():
         user="xrp_user",
         password="xrp_password",
         host="localhost",
-        port="5432"
+        port="5433"
     )
     df = pd.read_sql("SELECT * FROM xrp_data ORDER BY timestamp DESC LIMIT 100", conn)
     conn.close()
